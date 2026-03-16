@@ -1,0 +1,27 @@
+namespace: cloudcart
+
+frontend:
+  image: cloudcart-frontend
+  tag: latest
+  replicas: 2
+  containerPort: 80
+
+backend:
+  image: cloudcart-backend
+  tag: latest
+  replicas: 2
+  containerPort: 5000
+
+service:
+  frontendPort: 80
+  backendPort: 5000
+
+ingress:
+  enabled: true
+  host: cloudcart.local
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  cpuUtilization: 70
