@@ -1,0 +1,138 @@
+pipeline {
+
+agent any
+
+environment {
+AWS_REGION = "ap-south-1"
+}
+
+stages {
+
+```
+stage('Checkout Code') {
+  steps {
+    git 'git@github.com:powarprashant/cloudcart-3tier.git'
+  }
+}
+
+stage('Fetch AWS Credentials from Vault') {
+  steps {
+
+    withVault([vaultSecrets: [[
+      path: 'secret/data/cloudcart/aws',
+      secretValues: [
+        [vaultKey: 'access_key', envVar: 'AWS_ACCESS_KEY_ID'],
+        [vaultKey: 'secret_key', envVar: 'AWS_SECRET_ACCESS_KEY'],
+        [vaultKey: 'region', envVar: 'AWS_DEFAULT_REGION'],
+        [vaultKey: 'account_id', envVar: 'AWS_ACCOUNT_ID']
+      ]
+    ]]]) {
+
+      sh 'aws sts get-caller-identity'
+
+    }
+  }
+}
+
+stage('Terraform Init') {
+  steps {
+    dir('infrastructure/terraform/dev') {
+      sh 'terraform init'
+    }
+  }
+}
+
+stage('Terraform Plan') {
+  steps {
+    dir('infrastructure/terraform/dev') {
+      sh 'terraform plan'
+    }
+  }
+}
+
+stage('Terraform Apply') {
+  steps {
+    dir('infrastructure/terraform/dev') {
+      sh 'terraform apply -auto-approve'
+    }
+  }
+}
+
+stage('Update kubeconfig') {
+  steps {
+
+    sh '''
+    aws eks update-kubeconfig \
+    --region $AWS_DEFAULT_REGION \
+    --name cloudcart-eks
+    '''
+  }
+}
+
+stage('Login to ECR') {
+  steps {
+
+    sh '''
+    aws ecr get-login-password --region $AWS_DEFAULT_REGION \
+    | docker login --username AWS --password-stdin \
+    $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+    '''
+
+  }
+}
+
+stage('Build Docker Images') {
+  steps {
+
+    sh '''
+    docker build -t cloudcart-frontend ./app/frontend
+    docker build -t cloudcart-backend ./app/backend
+    '''
+
+  }
+}
+
+stage('Tag Images') {
+  steps {
+
+    sh '''
+    docker tag cloudcart-frontend:latest \
+    $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/cloudcart-frontend:latest
+
+    docker tag cloudcart-backend:latest \
+    $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/cloudcart-backend:latest
+    '''
+
+  }
+}
+
+stage('Push Images to ECR') {
+  steps {
+
+    sh '''
+    docker push \
+    $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/cloudcart-frontend:latest
+
+    docker push \
+    $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/cloudcart-backend:latest
+    '''
+
+  }
+}
+
+stage('Deploy with Helm') {
+  steps {
+
+    sh '''
+    helm upgrade --install cloudcart ./helm/cloudcart \
+    --namespace cloudcart \
+    --create-namespace
+    '''
+
+  }
+}
+```
+
+}
+
+}
